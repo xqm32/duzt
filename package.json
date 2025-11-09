@@ -10,6 +10,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "ai": "^5.0.89",
     "arquero": "^8.0.3"
   }
 }
