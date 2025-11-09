@@ -12,6 +12,7 @@
   "dependencies": {
     "@ai-sdk/openai-compatible": "^1.0.26",
     "ai": "^5.0.89",
-    "arquero": "^8.0.3"
+    "arquero": "^8.0.3",
+    "lodash": "^4.17.21"
   }
 }
