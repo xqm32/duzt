@@ -13,7 +13,9 @@ export async function initDatabase() {
       data JSONB NOT NULL,
       value TEXT NOT NULL,
       embedding vector(1024) NOT NULL,
-      UNIQUE(id, namespace)
+      ref TEXT NOT NULL,
+      UNIQUE(id, namespace),
+      UNIQUE(ref)
     )
   `;
   console.log("[OK] sources table ready");
@@ -43,9 +45,11 @@ export async function initDatabase() {
       embedding vector(1024) NOT NULL,
       matched_source_id BIGINT,
       similarity DOUBLE PRECISION CHECK (similarity >= 0 AND similarity <= 1),
+      ref TEXT NOT NULL,
       FOREIGN KEY (matched_source_id, namespace) 
         REFERENCES sources(id, namespace) 
-        ON DELETE SET NULL
+        ON DELETE SET NULL,
+      UNIQUE(ref)
     )
   `;
   console.log("[OK] targets table ready");

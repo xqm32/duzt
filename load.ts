@@ -44,11 +44,15 @@ async function insertRowsWithEmbeddings(
   tableType: TableType,
   rows: CsvRow[],
   embeddings: number[][],
-  valueColumn: string
-): Promise<void> {
+  valueColumn: string,
+  fileName: string,
+  startRowNumber: number
+): Promise<{ duplicates: number }> {
   if (rows.length !== embeddings.length) {
     throw new Error("Rows and embeddings length mismatch");
   }
+
+  let duplicateCount = 0;
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -60,12 +64,33 @@ async function insertRowsWithEmbeddings(
 
     const value = String(row[valueColumn]);
     const namespace = row[NAMESPACE_COLUMN];
+    const ref = `${fileName}:${startRowNumber + i}`;
 
-    await sql`
-      INSERT INTO ${sql(tableType)} (namespace, data, value, embedding)
-      VALUES (${namespace}, ${row}, ${value}, ${sql.array(embedding, "REAL")})
-    `;
+    try {
+      await sql`
+        INSERT INTO ${sql(tableType)} (namespace, data, value, embedding, ref)
+        VALUES (
+          ${namespace},
+          ${row},
+          ${value},
+          ${sql.array(embedding, "REAL")},
+          ${ref}
+        )
+      `;
+    } catch (error: any) {
+      const isDuplicate =
+        error?.message?.includes("duplicate key value") ||
+        error?.code === "23505";
+
+      if (isDuplicate) {
+        duplicateCount++;
+      } else {
+        throw error;
+      }
+    }
   }
+
+  return { duplicates: duplicateCount };
 }
 
 async function getCachedEmbedding(
@@ -96,8 +121,10 @@ async function processBatch(
   batchRows: CsvRow[],
   valueColumn: string,
   batchNumber: number,
-  totalBatches: number
-): Promise<FailedBatch | null> {
+  totalBatches: number,
+  fileName: string,
+  startRowNumber: number
+): Promise<{ failed: FailedBatch | null; duplicates: number }> {
   const logPrefix = tableType.toUpperCase();
   console.log(`[${logPrefix}] Batch ${batchNumber}/${totalBatches}`);
 
@@ -138,21 +165,27 @@ async function processBatch(
       console.log(`[${logPrefix}] All cached`);
     }
 
-    await insertRowsWithEmbeddings(
+    const { duplicates } = await insertRowsWithEmbeddings(
       tableType,
       batchRows,
       embeddings as number[][],
-      valueColumn
+      valueColumn,
+      fileName,
+      startRowNumber
     );
-    return null;
+
+    return { failed: null, duplicates };
   } catch (error) {
     console.error(`[${logPrefix}] Batch ${batchNumber} failed:`, error);
     return {
-      fileName: "",
-      batchNumber,
-      rows: batchRows,
-      error: String(error),
-      timestamp: new Date().toISOString(),
+      failed: {
+        fileName: "",
+        batchNumber,
+        rows: batchRows,
+        error: String(error),
+        timestamp: new Date().toISOString(),
+      },
+      duplicates: 0,
     };
   }
 }
@@ -217,22 +250,37 @@ async function loadFileData(
 
   const failedBatches: FailedBatch[] = [];
   const totalBatches = Math.ceil(validRows.length / BATCH_SIZE);
+  let totalDuplicates = 0;
 
   for (let i = 0; i < validRows.length; i += BATCH_SIZE) {
     const batchRows = validRows.slice(i, i + BATCH_SIZE);
     const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+    const startRowNumber = SKIP_ROWS + 1 + i; // CSV header + skipped rows + current position
 
-    const failedBatch = await processBatch(
+    const { failed, duplicates } = await processBatch(
       tableType,
       batchRows,
       valueColumn,
       batchNumber,
-      totalBatches
+      totalBatches,
+      fileName,
+      startRowNumber
     );
 
-    if (failedBatch) {
-      failedBatches.push(failedBatch);
+    if (failed) {
+      failedBatches.push(failed);
     }
+
+    if (duplicates > 0) {
+      console.log(
+        `[${logPrefix}] Batch ${batchNumber}: ${duplicates} duplicates skipped`
+      );
+      totalDuplicates += duplicates;
+    }
+  }
+
+  if (totalDuplicates > 0) {
+    console.log(`[${logPrefix}] Total duplicates skipped: ${totalDuplicates}`);
   }
 
   await saveFailedBatchesToFiles(tableType, fileName, failedBatches);
